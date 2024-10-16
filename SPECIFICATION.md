@@ -1,4 +1,4 @@
-# TCP Protocol
+# Protocol
 1. Initialize connection
 2. Data transmission
 3. Terminate connection
@@ -33,7 +33,7 @@ Data and acknowledgement is performed in lock-step (synchronised). The Client mu
    - Server sends an ACK packet to confirm the packet was recieved correctly or a NAK if parity is incorrect
    - Retransmits ACK/NAK if timeout occurs
      - Give up after 3 failures
-   - Ignores invalid packets (anything that is not DATA)
+   - Ignores invalid packets (anything that is not DATA or FIN)
 
 # Termination protocol (4-way handshake)
 1. FIN
@@ -45,7 +45,6 @@ Data and acknowledgement is performed in lock-step (synchronised). The Client mu
    - Server sends an ACK packet to the Client.
 3. FIN/RST
    - Server sends a FIN packet to indicate they are ready to close the connection or sends RST packet if the checksum does not match recieved data
-   - RST restarts data transmission
    - Retransmits after timeout if it does not recieve an ACK or SYN response
      - Give up after 3 tries
 4. ACK
@@ -79,6 +78,11 @@ Types are a bitfield. Bit 3 indicate the subtype (control/data), bits 0 to 2 ind
   - `1` = Control packet
   - `0` = Data packet
 
+## Data Packets (bit 3 = 0, data packets)
+- `0` (`0b0000`) = Normal data
+- `2` (`0b0010`) = Retransmission
+- `1`, `3` to `7` (`0b0001`, `0b0011` to `0b0111`): Undefined
+
 ## Control Packets (bit 3 = 1, control packets)
 - `8` (`0b1000`) = SYN (synchronize connection)
 - `9` (`0b1001`) = SYN-ACK (synchronize and acknowledge)
@@ -88,7 +92,3 @@ Types are a bitfield. Bit 3 indicate the subtype (control/data), bits 0 to 2 ind
 - `13` (`0b1101`) = RST (reset connection)
 - `14` & `15` (`0b1110` & `0b1111`): Undefined
 
-## Data Packets (bit 3 = 0, data packets)
-- `0` (`0b0000`) = Normal data
-- `1` (`0b0001`) = Retransmission
-- `4` to `7` (`0b0100` to `0b0111`): Undefined
