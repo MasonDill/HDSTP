@@ -8,5 +8,7 @@ rust-version = "1.61.0"
 
 [dependencies]
 tokio = { version = "1.40.0", features = ["full"] }
+async-trait = "0.1"
+
 
 [features]
