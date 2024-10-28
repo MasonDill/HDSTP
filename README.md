@@ -1,5 +1,7 @@
 # Custom TCP Protocol
-This project implements a custom TCP-like protocol designed for reliable data transmission. It incorporates mechanisms for connection establishment, data transmission, retransmission, and connection termination. The protocol aims to provide a relaiable, albeit slow means of communication over a networking layer.
+This project implements a custom TCP-like protocol designed for data transmission. It incorporates mechanisms for connection establishment, data transmission, retransmission, and connection termination. The protocol aims to provide a reliable, albeit slow means of communication over a networking layer.
+
+View SPECIFICATION.md for more information on the protocol details.
 
 ## Features
 - **3-Way Handshake**: Establishes a reliable connection between client and server.
