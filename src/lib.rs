@@ -133,18 +133,17 @@ impl Client {
         }
     }
 
-    pub async fn handshake(&mut self) -> Result<(), io::Error> {
+    pub async fn handshake(&mut self) -> io::Result<()> {
         // SYN
         let syn_packet = Packet::new(PacketType::Syn, self.sequence_number, vec![]);
         self.packet_stream.send_packet(syn_packet).await;
 
         // SYN-ACK
         let response = self.packet_stream.receive_packet(Duration::from_secs(1)).await;
-        // let packet_type = &response.unwrap().packet_type;
-
-        // if packet_type == &PacketType::SynAck{
-        //     return Err(std::io::Error::new(io::ErrorKind::Other, "Cannot read U32 from vector"))
-        // }
+        let packet_type = response.as_ref().unwrap().packet_type;
+        if packet_type != PacketType::SynAck{
+            return Err(std::io::Error::new(io::ErrorKind::Other, "Did not recieve handshake SNY-ACK response"))
+        }
 
         let response_data = response.unwrap().data;
         self.sequence_number = bytes_to_u32(&response_data, 0)?;
@@ -157,55 +156,45 @@ impl Client {
     }
 
     pub async fn send_data(&mut self, data: Vec<u8>) -> io::Result<()> {
-        let seq_no = self.conn.client_isn + 1;
-        let data_packet = Packet::new(DATA, seq_no, data);
+        let seq_no = self.sequence_number + 1;
+        let data_packet = Packet::new(PacketType::Data, seq_no, data);
 
+        // Send data
         self.packet_stream.send_packet(data_packet).await;
-        println!("Client: Sent DATA with sequence number {}", seq_no);
-
-        self.packet_stream.handle_timeout(
-            || {
-                tokio::spawn(async move {
-                    let timeout = Duration::from_secs(3);
-                    if let Some(response_packet) = self.packet_stream.receive_packet(timeout).await {
-                        match response_packet.packet_type {
-                            ACK => println!("Client: Received ACK for sequence number {}", seq_no),
-                            NAK => println!("Client: Received NAK, retransmitting DATA"),
-                            _ => println!("Client: Ignoring invalid response"),
-                        }
-                    } else {
-                        return Err(io::Error::new(io::ErrorKind::TimedOut, "Data transmission timed out"));
-                    }
-                    Ok(())
-                });
-                Ok(())
-            },
-            Duration::from_secs(3)
-        ).await
+        
+        // Await ACK
+        let response = self.packet_stream.receive_packet(Duration::new(1, 0)).await;
+        let packet_type = response.as_ref().unwrap().packet_type;
+        if packet_type != PacketType::Ack{
+            return Err(std::io::Error::new(io::ErrorKind::Other, "Did not recieve data ACK response"));
+        }
+        Ok(())
     }
 
-    pub async fn terminate(&mut self) -> io::Result<()> {
-        let fin_packet = Packet::new(FIN, self.conn.client_isn + 1, vec![]);
+    pub async fn terminate(&mut self) -> io::Result<(), > {
+        let seq_no = self.sequence_number + 1;
+        // Send FIN
+        let fin_packet = Packet::new(PacketType::Fin, seq_no, vec![]);
         self.packet_stream.send_packet(fin_packet).await;
-        println!("Client: Sent FIN");
 
-        self.packet_stream.handle_timeout(
-            || {
-                tokio::spawn(async move {
-                    let timeout = Duration::from_secs(3);
-                    if let Some(ack_packet) = self.packet_stream.receive_packet(timeout).await {
-                        if ack_packet.packet_type == ACK {
-                            println!("Client: Received ACK, waiting for server FIN");
-                        } else {
-                            return Err(io::Error::new(io::ErrorKind::InvalidData, "Expected ACK"));
-                        }
-                    }
-                    Ok(())
-                });
-                Ok(())
-            },
-            Duration::from_secs(3)
-        ).await
+        // Await ACK response
+        let response = self.packet_stream.receive_packet(Duration::new(1, 0)).await;
+        let packet_type = response.as_ref().unwrap().packet_type;
+        if packet_type != PacketType::Ack{
+            return Err(std::io::Error::new(io::ErrorKind::Other, "Did not recieve fin ACK response"));
+        }
+        
+        // Await FIN/RST
+        let response = self.packet_stream.receive_packet(Duration::new(1, 0)).await;
+        let packet_type = response.as_ref().unwrap().packet_type;
+        if packet_type != PacketType::Fin{
+            return Err(std::io::Error::new(io::ErrorKind::Other, "Did not recieve fin FIN response"));
+        }
+
+        // Send ACK
+        let ack_packet = Packet::new(PacketType::Ack, seq_no, vec![]);
+        self.packet_stream.send_packet(ack_packet).await;
+        Ok(())
     }
 }
 
