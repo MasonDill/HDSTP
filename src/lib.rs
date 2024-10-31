@@ -44,6 +44,19 @@ fn check_parity(data: &[u8]) -> u8 {
     if ones_count == 0 { 0b0000 } else { 0b1111 }
 }
 
+fn bytes_to_u32(byte_vector: &Vec<u8>, start_index: usize) -> Result<u32, io::Error> {
+    // converts to BIG endian u32
+    if start_index + 4 <= byte_vector.len() {
+        let result: u32 = (byte_vector[start_index] as u32) << 24
+                        | (byte_vector[start_index + 1] as u32) << 16
+                        | (byte_vector[start_index + 2] as u32) << 8
+                        | (byte_vector[start_index + 3] as u32);
+        Ok(result)
+    } else {
+        Err(std::io::Error::new(io::ErrorKind::Other, "Cannot read U32 from vector"))
+    }
+}
+
 pub struct PacketStream {
     buffer: VecDeque<Packet>,
     notify: Notify,
@@ -91,9 +104,6 @@ impl PacketStream {
 trait TransportProtocol {
     async fn send_packet(&mut self, packet: Packet);
     async fn receive_packet(&mut self, timeout: Duration) -> Option<Packet>;
-    async fn handle_timeout<F>(&mut self, mut action: F, timeout: Duration) -> io::Result<()>
-    where
-        F: FnMut() -> io::Result<()>;
 }
 
 #[async_trait::async_trait]
@@ -107,73 +117,43 @@ impl TransportProtocol for PacketStream {
     async fn receive_packet(&mut self, timeout: Duration) -> Option<Packet> {
         self.read_with_timeout(timeout).await
     }
-
-    // Handle timeouts for specific actions, with retries
-    async fn handle_timeout<F>(&mut self, mut action: F, timeout: Duration) -> io::Result<()>
-    where
-        F: FnMut() -> Pin<Box<dyn Future<Output = io::Result<()>> + Send>> + Send + 'async_trait,
-    {
-        let mut retries = 0;
-        while retries < 3 {
-            // Call the action and await its result
-            let result = action().await;
-            match result {
-                Ok(_) => return Ok(()),
-                Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {
-                    retries += 1;
-                    println!("Retrying... Attempt {}/3", retries);
-                    sleep(timeout).await; // Sleep before retrying
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        Err(io::Error::new(io::ErrorKind::TimedOut, "Operation failed after 3 retries"))
-    }
 }
 
 struct Client {
     packet_stream: PacketStream,
-    conn: Connection,
+    sequence_number: u32
 }
 
 impl Client {
     pub fn new(packet_stream: PacketStream) -> Client {
+        let sequence_number = 0;
         Client {
             packet_stream,
-            conn: Connection::new(),
+            sequence_number
         }
     }
 
-    pub async fn handshake(&mut self) -> io::Result<()> {
-        let syn_packet = Packet::new(SYN, self.conn.client_isn, vec![]);
+    pub async fn handshake(&mut self) -> Result<(), io::Error> {
+        // SYN
+        let syn_packet = Packet::new(PacketType::Syn, self.sequence_number, vec![]);
         self.packet_stream.send_packet(syn_packet).await;
 
-        println!("Client: Sent SYN with ISN {}", self.conn.client_isn);
+        // SYN-ACK
+        let response = self.packet_stream.receive_packet(Duration::from_secs(1)).await;
+        // let packet_type = &response.unwrap().packet_type;
 
-        self.packet_stream.handle_timeout(
-            || {
-                let timeout = Duration::from_secs(3);
-                tokio::spawn(async move {
-                    if let Some(syn_ack_packet) = self.packet_stream.receive_packet(timeout).await {
-                        if syn_ack_packet.packet_type != SYN_ACK {
-                            return Err(io::Error::new(io::ErrorKind::InvalidData, "Expected SYN-ACK"));
-                        }
-                        self.conn.server_isn = syn_ack_packet.seq_no;
-                        println!("Client: Received SYN-ACK with Server ISN {}", self.conn.server_isn);
+        // if packet_type == &PacketType::SynAck{
+        //     return Err(std::io::Error::new(io::ErrorKind::Other, "Cannot read U32 from vector"))
+        // }
 
-                        let ack_packet = Packet::new(ACK, self.conn.server_isn + 1, vec![]);
-                        self.packet_stream.send_packet(ack_packet).await;
+        let response_data = response.unwrap().data;
+        self.sequence_number = bytes_to_u32(&response_data, 0)?;
+        
+        // ACK
+        let ack_packet = Packet::new(PacketType::Ack, self.sequence_number, vec![]);
+        self.packet_stream.send_packet(ack_packet).await;
 
-                        println!("Client: Sent ACK, connection established");
-                        Ok(())
-                    } else {
-                        Err(io::Error::new(io::ErrorKind::TimedOut, "Handshake timed out"))
-                    }
-                });
-                Ok(())
-            },
-            Duration::from_secs(3)
-        ).await
+        Ok(())
     }
 
     pub async fn send_data(&mut self, data: Vec<u8>) -> io::Result<()> {
