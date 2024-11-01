@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 use tokio::sync::Notify;
 use std::io;
 use rand::Rng;
+use std::cmp::min;
 use std::pin::Pin;
 use std::future::Future;
 
@@ -197,6 +198,34 @@ impl Client {
         self.packet_stream.send_packet(ack_packet).await;
         Ok(())
     }
+
+    pub fn packetize(&self, data: Vec<u8>, packet_size: usize) -> Vec<Vec<u8>> {
+        let mut packets: Vec<Vec<u8>> = Vec::new();
+        let mut i = 0;
+
+        while i < data.len() {
+            // Determine the size of the next chunk
+            let end = min(i + packet_size, data.len());
+            // Push the chunk into packets
+            packets.push(data[i..end].to_vec());
+            i += packet_size;
+        }
+
+        return packets
+    }
+
+    pub async fn transmit(&mut self, data: Vec<u8>) -> io::Result<()>{
+        const PACKET_SIZE: usize = 8; // packet data size (in bytes)
+        let packets = self.packetize(data, PACKET_SIZE);
+
+        _ = self.handshake().await;
+        for packet in packets {
+            _ = self.send_data(packet).await;
+        }
+        _ = self.terminate().await;
+
+        Ok(())
+    }
 }
 
 struct Server {
@@ -265,7 +294,7 @@ impl Server {
     }
 
     pub async fn recieve(&mut self) -> io::Result<()> {
-        self.handshake();
+        let _ = self.handshake();
 
         let mut data_packets : Vec<Vec<u8>> = vec![vec![]];
         while let packet = self.receive_data().await? {
@@ -276,8 +305,7 @@ impl Server {
             }
         }
 
-        self.terminate();
+        let _ = self.terminate().await;
         Ok(())
     }
-
 }
