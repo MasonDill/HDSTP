@@ -6,12 +6,14 @@ use rand::Rng;
 use std::cmp::min;
 use std::pin::Pin;
 use std::future::Future;
-
 use async_trait::async_trait;
 
+pub mod transfer;
+pub use crate::transfer::FileTransfer;
+pub use crate::transfer::send_with_retry;
 
 #[derive(Copy, Clone, PartialEq)]
-pub enum PacketType {
+enum PacketType {
     // Data packets (0b0XXX)
     Data = 0b0001,
     Retransmission = 0b0010,
@@ -24,7 +26,7 @@ pub enum PacketType {
     Fin = 0b1100,
     Rst = 0b1101
 }
-pub struct Packet {
+struct Packet {
     length: u32,
     packet_type: PacketType,
     sequence_no: u32,
@@ -59,25 +61,25 @@ fn bytes_to_u32(byte_vector: &Vec<u8>, start_index: usize) -> Result<u32, io::Er
     }
 }
 
-pub struct PacketStream {
+struct PacketStream {
     buffer: VecDeque<Packet>,
     notify: Notify,
 }
 
 impl PacketStream {
-    pub fn new() -> Self {
+    fn new() -> Self {
         PacketStream {
             buffer: VecDeque::new(),
             notify: Notify::new(),
         }
     }
 
-    pub fn write(&mut self, packet: Packet) {
+    fn write(&mut self, packet: Packet) {
         self.buffer.push_back(packet);
         self.notify.notify_one();
     }
 
-    pub async fn read(&mut self) -> Option<Packet> {
+    async fn read(&mut self) -> Option<Packet> {
         self.notify.notified().await;
         let packet = if self.buffer.is_empty() {
             None
@@ -88,7 +90,7 @@ impl PacketStream {
         packet
     }
 
-    pub async fn read_with_timeout(&mut self, timeout: Duration) -> Option<Packet> {
+    async fn read_with_timeout(&mut self, timeout: Duration) -> Option<Packet> {
         // Simulate timeout behavior when reading
         tokio::select! {
             _ = sleep(timeout) => {
@@ -135,7 +137,7 @@ impl Client {
         }
     }
 
-    pub async fn handshake(&mut self) -> io::Result<()> {
+    async fn handshake(&mut self) -> io::Result<()> {
         // SYN
         let syn_packet = Packet::new(PacketType::Syn, self.sequence_number, vec![]);
         self.packet_stream.send_packet(syn_packet).await;
@@ -157,7 +159,7 @@ impl Client {
         Ok(())
     }
 
-    pub async fn send_data(&mut self, data: Vec<u8>) -> io::Result<()> {
+    async fn send_data(&mut self, data: Vec<u8>) -> io::Result<()> {
         let seq_no = self.sequence_number + 1;
         let data_packet = Packet::new(PacketType::Data, seq_no, data);
 
@@ -173,7 +175,7 @@ impl Client {
         Ok(())
     }
 
-    pub async fn terminate(&mut self) -> io::Result<()> {
+    async fn terminate(&mut self) -> io::Result<()> {
         let seq_no = self.sequence_number + 1;
         // Send FIN
         let fin_packet = Packet::new(PacketType::Fin, seq_no, vec![]);
@@ -199,7 +201,7 @@ impl Client {
         Ok(())
     }
 
-    pub fn packetize(&self, data: Vec<u8>, packet_size: usize) -> Vec<Vec<u8>> {
+    fn packetize(&self, data: Vec<u8>, packet_size: usize) -> Vec<Vec<u8>> {
         let mut packets: Vec<Vec<u8>> = Vec::new();
         let mut i = 0;
 
@@ -243,7 +245,7 @@ impl Server {
         }
     }
 
-    pub async fn handshake(&mut self) -> io::Result<()> {
+    async fn handshake(&mut self) -> io::Result<()> {
         // await SYN
         let request = self.packet_stream.receive_packet(Duration::new(1, 0)).await;
         let packet_type = request.as_ref().unwrap().packet_type;
@@ -265,7 +267,7 @@ impl Server {
         Ok(())
     }
 
-    pub async fn receive_data(&mut self) -> Result<Packet, io::Error> {
+    async fn receive_data(&mut self) -> Result<Packet, io::Error> {
         // await DATA packet
         let request = self.packet_stream.receive_packet(Duration::new(1, 0)).await;
         let packet_type = request.as_ref().unwrap().packet_type;
@@ -284,7 +286,7 @@ impl Server {
         return Ok(request.unwrap())
     }
 
-    pub async fn terminate(&mut self) -> io::Result<()> {
+    async fn terminate(&mut self) -> io::Result<()> {
         // respond with ACK
         let sequence_no = self.sequence_number + 1;
         let ack_packet = Packet::new(PacketType::Ack, sequence_no, vec![]);

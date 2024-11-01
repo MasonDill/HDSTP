@@ -1,21 +1,21 @@
 use tokio;
 use std::io;
 use std::time::Duration;
-
-struct FileTransfer {
+use crate::{Client, Server, PacketStream};
+pub struct FileTransfer {
     client: Option<Client>,
     server: Option<Server>,
 }
 
 impl FileTransfer {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             client: None,
             server: None,
         }
     }
 
-    async fn start_server(&mut self) -> io::Result<()> {
+    pub async fn start_server(&mut self) -> io::Result<()> {
         let stream = PacketStream::new();
         let mut server = Server::new(stream);
         
@@ -39,7 +39,7 @@ impl FileTransfer {
         Ok(())
     }
 
-    async fn send_file(&mut self, data: Vec<u8>) -> io::Result<()> {
+    pub async fn send_file(&mut self, data: Vec<u8>) -> io::Result<()> {
         let stream = PacketStream::new();
         let mut client = Client::new(stream);
 
@@ -59,7 +59,7 @@ impl FileTransfer {
     }
 }
 
-async fn send_with_retry(data: Vec<u8>, max_retries: u32) -> io::Result<()> {
+pub async fn send_with_retry(data: Vec<u8>, max_retries: u32) -> io::Result<()> {
     let mut retry_count = 0;
     let mut transfer = FileTransfer::new();
 
