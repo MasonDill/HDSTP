@@ -2,6 +2,7 @@ use tokio::time::{sleep, Duration};
 use std::collections::VecDeque;
 use tokio::sync::Notify;
 use std::io;
+use rand::Rng;
 use std::pin::Pin;
 use std::future::Future;
 
@@ -171,7 +172,7 @@ impl Client {
         Ok(())
     }
 
-    pub async fn terminate(&mut self) -> io::Result<(), > {
+    pub async fn terminate(&mut self) -> io::Result<()> {
         let seq_no = self.sequence_number + 1;
         // Send FIN
         let fin_packet = Packet::new(PacketType::Fin, seq_no, vec![]);
@@ -200,71 +201,83 @@ impl Client {
 
 struct Server {
     packet_stream: PacketStream,
-    conn: Connection,
+    sequence_number: u32
 }
 
 impl Server {
     pub fn new(packet_stream: PacketStream) -> Server {
+        let mut rng = rand::thread_rng();
+        let sequence_number: u32 = rng.gen();
         Server {
             packet_stream,
-            conn: Connection::new(),
+            sequence_number,
         }
     }
 
     pub async fn handshake(&mut self) -> io::Result<()> {
-        self.packet_stream.handle_timeout(
-            || {
-                tokio::spawn(async move {
-                    let timeout = Duration::from_secs(3);
-                    if let Some(syn_packet) = self.packet_stream.receive_packet(timeout).await {
-                        if syn_packet.packet_type != SYN {
-                            return Err(io::Error::new(io::ErrorKind::InvalidData, "Expected SYN"));
-                        }
+        // await SYN
+        let request = self.packet_stream.receive_packet(Duration::new(1, 0)).await;
+        let packet_type = request.as_ref().unwrap().packet_type;
+        if packet_type == PacketType::Syn{
+            return Err(std::io::Error::new(io::ErrorKind::Other, "Expected SYN request"));
+        }
 
-                        self.conn.client_isn = syn_packet.seq_no;
-                        println!("Server: Received SYN with Client ISN {}", self.conn.client_isn);
+        // return SYN-ACK with sequence number
+        let syn_ack_packet = Packet::new(PacketType::SynAck, self.sequence_number, vec![]);
+        self.packet_stream.send_packet(syn_ack_packet).await;
 
-                        let syn_ack_packet = Packet::new(SYN_ACK, self.conn.client_isn + 1, vec![]);
-                        self.packet_stream.send_packet(syn_ack_packet).await;
+        // Await ACK
+        let response = self.packet_stream.receive_packet(Duration::new(1, 0)).await;
+        let packet_type = response.as_ref().unwrap().packet_type;
+        if packet_type == PacketType::Syn{
+            return Err(std::io::Error::new(io::ErrorKind::Other, "Expected SYN request"));
+        }
 
-                        println!("Server: Sent SYN-ACK");
-                    } else {
-                        return Err(io::Error::new(io::ErrorKind::TimedOut, "Handshake timed out"));
-                    }
-                    Ok(())
-                });
-                Ok(())
-            },
-            Duration::from_secs(3)
-        ).await
+        Ok(())
     }
 
-    pub async fn receive_data(&mut self) -> io::Result<()> {
-        self.packet_stream.handle_timeout(
-            || {
-                tokio::spawn(async move {
-                    let timeout = Duration::from_secs(3);
-                    if let Some(data_packet) = self.packet_stream.receive_packet(timeout).await {
-                        if data_packet.packet_type == DATA {
-                            println!("Server: Received DATA with sequence number {}", data_packet.seq_no);
+    pub async fn receive_data(&mut self) -> Result<Packet, io::Error> {
+        // await DATA packet
+        let request = self.packet_stream.receive_packet(Duration::new(1, 0)).await;
+        let packet_type = request.as_ref().unwrap().packet_type;
 
-                            if data_packet.verify_parity() {
-                                let ack_packet = Packet::new(ACK, data_packet.seq_no, vec![]);
-                                self.packet_stream.send_packet(ack_packet).await;
-                                println!("Server: Sent ACK");
-                            } else {
-                                let nak_packet = Packet::new(NAK, data_packet.seq_no, vec![]);
-                                self.packet_stream.send_packet(nak_packet).await;
-                                println!("Server: Sent NAK due to parity error");
-                            }
-                        }
-                    }
-                    Ok(())
-                });
-                Ok(())
-            },
-            Duration::from_secs(3)
-        ).await
+        if packet_type == PacketType::Fin{
+            return Ok(request.unwrap());
+        }
+        else if packet_type != PacketType::Data{
+            return Err(std::io::Error::new(io::ErrorKind::Other, "Expected DATA request"));
+        }
+
+        // respond with ACK
+        let ack_packet = Packet::new(PacketType::Ack, self.sequence_number, vec![]);
+        self.packet_stream.send_packet(ack_packet).await;
+        
+        return Ok(request.unwrap())
+    }
+
+    pub async fn terminate(&mut self) -> io::Result<()> {
+        // respond with ACK
+        let sequence_no = self.sequence_number + 1;
+        let ack_packet = Packet::new(PacketType::Ack, sequence_no, vec![]);
+        self.packet_stream.send_packet(ack_packet).await;
+        
+        Ok(())
+    }
+
+    pub async fn recieve(&mut self) -> io::Result<()> {
+        self.handshake();
+
+        let mut data_packets : Vec<Vec<u8>> = vec![vec![]];
+        while let packet = self.receive_data().await? {
+            if packet.packet_type == PacketType::Data {
+                data_packets.push(packet.data);
+            } else {
+                break; // Exit the loop if the condition is not met
+            }
+        }
+
+        self.terminate();
+        Ok(())
     }
 
 }
