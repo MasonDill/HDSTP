@@ -39,7 +39,7 @@ impl FileTransfer {
         Ok(())
     }
 
-    pub async fn send_file(&mut self, data: Vec<u8>) -> io::Result<()> {
+    async fn send_file(&mut self, data: Vec<u8>) -> io::Result<()> {
         let stream = PacketStream::new();
         let mut client = Client::new(stream);
 
