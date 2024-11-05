@@ -128,6 +128,10 @@ struct Client {
     sequence_number: u32
 }
 
+fn calc_crc(data : &Vec<u8>) -> Vec<u8>{
+    todo!();
+}
+
 impl Client {
     pub fn new(packet_stream: PacketStream) -> Client {
         let sequence_number = 0;
@@ -175,10 +179,11 @@ impl Client {
         Ok(())
     }
 
-    async fn terminate(&mut self) -> io::Result<()> {
+    async fn terminate(&mut self, crc:Vec<u8>) -> io::Result<()> {
         let seq_no = self.sequence_number + 1;
+        
         // Send FIN
-        let fin_packet = Packet::new(PacketType::Fin, seq_no, vec![]);
+        let fin_packet = Packet::new(PacketType::Fin, seq_no, crc);
         self.packet_stream.send_packet(fin_packet).await;
 
         // Await ACK response
@@ -201,14 +206,12 @@ impl Client {
         Ok(())
     }
 
-    fn packetize(&self, data: Vec<u8>, packet_size: usize) -> Vec<Vec<u8>> {
+    fn packetize(&self, data: &Vec<u8>, packet_size: usize) -> Vec<Vec<u8>> {
         let mut packets: Vec<Vec<u8>> = Vec::new();
         let mut i = 0;
 
         while i < data.len() {
-            // Determine the size of the next chunk
             let end = min(i + packet_size, data.len());
-            // Push the chunk into packets
             packets.push(data[i..end].to_vec());
             i += packet_size;
         }
@@ -218,13 +221,13 @@ impl Client {
 
     pub async fn transmit(&mut self, data: Vec<u8>) -> io::Result<()>{
         const PACKET_SIZE: usize = 8; // packet data size (in bytes)
-        let packets = self.packetize(data, PACKET_SIZE);
+        let packets = self.packetize(&data, PACKET_SIZE);
 
         _ = self.handshake().await;
         for packet in packets {
             _ = self.send_data(packet).await;
         }
-        _ = self.terminate().await;
+        _ = self.terminate(calc_crc(&data)).await;
 
         Ok(())
     }
