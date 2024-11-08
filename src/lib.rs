@@ -270,23 +270,40 @@ impl Server {
         Ok(())
     }
 
+    fn check_sequence_number(&self, packet : &Packet) -> bool {
+        let sequence_no = packet.sequence_no;
+        return sequence_no == self.sequence_number
+    }
+
+    fn check_packet(&self, recieved_packet: &Packet, expected_packet_types : Vec<PacketType>) -> Result<(), io::Error> {
+        let recieved_packet_type = recieved_packet.packet_type;
+        
+        if !expected_packet_types.contains(&recieved_packet_type) {
+            return Err(std::io::Error::new(io::ErrorKind::Other, "Wrong packet type")); 
+        }
+
+        if !self.check_sequence_number(&recieved_packet) {
+            return Err(std::io::Error::new(io::ErrorKind::Other, "Wrong sequence number")); 
+        }
+
+        return Ok(())
+    }
+
     async fn receive_data(&mut self) -> Result<Packet, io::Error> {
         // await DATA packet
         let request = self.packet_stream.receive_packet(Duration::new(1, 0)).await;
-        let packet_type = request.as_ref().unwrap().packet_type;
+        let packet = request.unwrap();
+        self.check_packet(&packet, vec![PacketType::Fin, PacketType::Data]);
 
-        if packet_type == PacketType::Fin{
-            return Ok(request.unwrap());
-        }
-        else if packet_type != PacketType::Data{
-            return Err(std::io::Error::new(io::ErrorKind::Other, "Expected DATA request"));
+        if packet.packet_type == PacketType::Fin{
+            return Ok(packet);
         }
 
         // respond with ACK
         let ack_packet = Packet::new(PacketType::Ack, self.sequence_number, vec![]);
         self.packet_stream.send_packet(ack_packet).await;
         
-        return Ok(request.unwrap())
+        return Ok(packet)
     }
 
     async fn terminate(&mut self) -> io::Result<()> {
